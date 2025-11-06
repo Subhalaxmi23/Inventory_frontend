@@ -104,7 +104,9 @@ export default function StocksPage() {
     const token = getToken();
 
     const method = editingStock ? "PUT" : "POST";
-    const url = editingStock ? `${baseURL}/${editingStock._id}` : baseURL;
+    const url = editingStock 
+      ? `${baseURL}/api/stocks/${editingStock._id}` 
+      : `${baseURL}/api/stocks`;
 
     try {
       const res = await fetch(url, {
@@ -113,7 +115,12 @@ export default function StocksPage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          productName: formData.productName,
+          category: formData.category,
+          quantity: Number(formData.quantity),
+          supplierId: formData.supplierId,
+        }),
       });
 
       if (res.ok) {
@@ -125,11 +132,15 @@ export default function StocksPage() {
         });
         setEditingStock(null);
         fetchStocks();
+        alert(editingStock ? "Stock updated successfully!" : "Stock added successfully!");
       } else {
-        console.error("❌ Error submitting form:", await res.json());
+        const errorData = await res.json();
+        alert(`Error: ${errorData.message || "Failed to save stock"}`);
+        console.error("❌ Error submitting form:", errorData);
       }
     } catch (err) {
       console.error("❌ Error submitting form:", err);
+      alert("Failed to save stock. Please try again.");
     }
   };
 
@@ -150,13 +161,20 @@ export default function StocksPage() {
     if (!confirm("Are you sure you want to delete this stock?")) return;
 
     try {
-      const res = await fetch(`${baseURL}/${id}`, {
+      const res = await fetch(`${baseURL}/api/stocks/${id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) fetchStocks();
+      if (res.ok) {
+        fetchStocks();
+        alert("Stock deleted successfully!");
+      } else {
+        const errorData = await res.json();
+        alert(`Error: ${errorData.message || "Failed to delete stock"}`);
+      }
     } catch (err) {
       console.error("❌ Error deleting stock:", err);
+      alert("Failed to delete stock. Please try again.");
     }
   };
 

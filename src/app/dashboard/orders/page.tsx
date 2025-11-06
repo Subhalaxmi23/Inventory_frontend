@@ -1,6 +1,6 @@
 "use client";
 import { baseURL } from "@/config/apiConfig";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Swal from "sweetalert2";
 
 interface Product {
@@ -19,7 +19,7 @@ interface OrderItem {
 
 interface Order {
   _id?: string;
-  userId?: string;
+  userId?: string | { name?: string; email?: string };
   items: OrderItem[];
   totalAmount: number;
   status: string;
@@ -27,14 +27,17 @@ interface Order {
   customerName?: string;
 }
 
-const API_ORDERS = `${baseURL}/api/orders`;
+
+// For local testing - change to production before deploying
+const API_ORDERS = "http://localhost:4001/api/orders";
+// const API_ORDERS = `${baseURL}/api/orders`;
 const API_PRODUCTS = `${baseURL}/api/products`;
 
 export default function OrdersManagement() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState<"admin" | "customer">("customer"); // toggle to test
+  const [userRole, setUserRole] = useState<"admin" | "customer">("admin");
   const [formData, setFormData] = useState({
     productId: "",
     quantity: 1,
@@ -43,89 +46,72 @@ export default function OrdersManagement() {
   const token =
     typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
-  // Fetch products for customers
+  // Get user role from localStorage
+  useEffect(() => {
+    const role = localStorage.getItem("role");
+    if (role === "admin" || role === "customer") {
+      setUserRole(role);
+    }
+  }, []);
+
+  // Fetch products (admin doesn't need this for orders page, but keeping for consistency)
   const fetchProducts = async () => {
     try {
       const res = await fetch(API_PRODUCTS, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
-      setProducts(data);
+      if (Array.isArray(data)) {
+        setProducts(data);
+      }
     } catch (err) {
       console.error("❌ Error fetching products:", err);
     }
   };
 
-  // Fetch orders (different for admin & customer)
-  const fetchOrders = async () => {
+  // Fetch all orders (admin only)
+  const fetchOrders = useCallback(async () => {
+    if (!token) return;
+    
     try {
-      const url = userRole === "admin" ? API_ORDERS : `${API_ORDERS}/my-orders`;
-
-      const res = await fetch(url, {
+      const res = await fetch(API_ORDERS, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      const data = await res.json();
-      setOrders(data);
+      if (res.ok) {
+        const data = await res.json();
+        // Sort orders by most recent first (newest at top)
+        const sortedOrders = Array.isArray(data) 
+          ? data.sort((a, b) => {
+              const dateA = new Date(a.createdAt || 0).getTime();
+              const dateB = new Date(b.createdAt || 0).getTime();
+              return dateB - dateA; // Descending order (newest first)
+            })
+          : [];
+        setOrders(sortedOrders);
+      } else {
+        console.error("Failed to fetch orders");
+      }
     } catch (err) {
       console.error("❌ Error fetching orders:", err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [token]);
 
   useEffect(() => {
-    fetchProducts();
-    fetchOrders();
-  }, [userRole]);
-
-  // Customer places new order
-  const handlePlaceOrder = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const product = products.find((p) => p._id === formData.productId);
-    if (!product)
-      return Swal.fire("Error", "Please select a product.", "error");
-
-    const body = {
-      items: [
-        {
-          productId: product._id,
-          productName: product.productName,
-          quantity: Number(formData.quantity),
-          price: product.price,
-        },
-      ],
-      totalAmount: product.price * Number(formData.quantity),
-    };
-
-    try {
-      const res = await fetch(API_ORDERS, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(body),
-      });
-
-      if (res.ok) {
-        Swal.fire({
-          icon: "success",
-          title: "Order placed successfully!",
-          timer: 1500,
-          showConfirmButton: false,
-        });
-        setFormData({ productId: "", quantity: 1 });
+    if (token && userRole === "admin") {
+      fetchOrders();
+      
+      // Auto-refresh orders every 5 seconds to show new customer orders
+      const interval = setInterval(() => {
         fetchOrders();
-      } else {
-        const errData = await res.json();
-        Swal.fire("Error", errData.message || "Failed to place order", "error");
-      }
-    } catch (err) {
-      console.error("❌ Error placing order:", err);
+      }, 5000); // Refresh every 5 seconds
+      
+      return () => clearInterval(interval); // Cleanup on unmount
     }
-  };
+  }, [userRole, token, fetchOrders]);
+
 
   // Admin updates order status
   const handleStatusUpdate = async (id: string, newStatus: string) => {
@@ -169,140 +155,135 @@ export default function OrdersManagement() {
             Swal.fire("Deleted!", "Order deleted successfully.", "success");
             fetchOrders();
           } else {
-            Swal.fire("Error", "Failed to delete order.", "error");
+            const errData = await res.json().catch(() => ({ message: "Failed to delete order" }));
+            Swal.fire("Error", errData.message || "Failed to delete order.", "error");
           }
         } catch (err) {
           console.error("❌ Error deleting order:", err);
+          Swal.fire("Error", "Failed to delete order. Please try again.", "error");
         }
       }
     });
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-6 max-w-7xl mx-auto">
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">
-          {userRole === "admin" ? "🧾 Admin Order Management" : "🛍️ My Orders"}
-        </h1>
-       
-      </div>
-
-      {/* CUSTOMER ORDER FORM */}
-      {userRole === "customer" && (
-        <form
-          onSubmit={handlePlaceOrder}
-          className="bg-gray-100 p-4 rounded-lg shadow-md mb-6 grid grid-cols-3 gap-4"
+        <h1 className="text-2xl font-bold">🧾 Admin Order Management</h1>
+        <button
+          onClick={() => {
+            setLoading(true);
+            fetchOrders();
+          }}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 flex items-center gap-2"
+          disabled={loading}
         >
-          <select
-            name="productId"
-            value={formData.productId}
-            onChange={(e) =>
-              setFormData({ ...formData, productId: e.target.value })
-            }
-            className="border p-2 rounded"
-            required
-          >
-            <option value="">Select Product</option>
-            {products.map((p) => (
-              <option key={p._id} value={p._id}>
-                {p.productName} - ₹{p.price}
-              </option>
-            ))}
-          </select>
-
-          <input
-            type="number"
-            name="quantity"
-            value={formData.quantity}
-            onChange={(e) =>
-              setFormData({ ...formData, quantity: Number(e.target.value) })
-            }
-            placeholder="Quantity"
-            min={1}
-            className="border p-2 rounded"
-            required
-          />
-
-          <button
-            type="submit"
-            className="bg-blue-600 text-white py-2 rounded hover:bg-blue-700 col-span-1"
-          >
-            Place Order
-          </button>
-        </form>
-      )}
+          <span>🔄</span>
+          {loading ? "Refreshing..." : "Refresh Orders"}
+        </button>
+      </div>
 
       {/* ORDERS TABLE */}
       {loading ? (
-        <p>Loading orders...</p>
+        <p className="text-center py-4">Loading orders...</p>
       ) : (
-        <table className="w-full border-collapse border border-gray-300">
-          <thead className="bg-gray-200">
-            <tr>
-              <th className="border p-2">ID</th>
-              {userRole === "admin" && <th className="border p-2">Customer</th>}
-              <th className="border p-2">Product</th>
-              <th className="border p-2">Qty</th>
-              <th className="border p-2">Price</th>
-              <th className="border p-2">Total</th>
-              <th className="border p-2">Status</th>
-              {userRole === "admin" && <th className="border p-2">Actions</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {orders.map((order, idx) => (
-              <tr key={order._id}>
-                <td className="border p-2">{idx + 1}</td>
-                {userRole === "admin" && (
-                  <td className="border p-2">
-                    {order.customerName || order.userId || "N/A"}
-                  </td>
-                )}
-                <td className="border p-2">
-                  {order.items[0]?.productName || "—"}
-                </td>
-                <td className="border p-2">{order.items[0]?.quantity}</td>
-                <td className="border p-2">₹{order.items[0]?.price}</td>
-                <td className="border p-2">₹{order.totalAmount}</td>
-                <td className="border p-2 capitalize">{order.status}</td>
-
-                {userRole === "admin" && (
-                  <td className="border p-2 flex gap-2 justify-center">
-                    <select
-                      value={order.status}
-                      onChange={(e) =>
-                        handleStatusUpdate(order._id!, e.target.value)
-                      }
-                      className="border rounded p-1"
-                    >
-                      <option value="pending">Pending</option>
-                      <option value="shipped">Shipped</option>
-                      <option value="delivered">Delivered</option>
-                    </select>
-
-                    <button
-                      onClick={() => handleDelete(order._id!)}
-                      className="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700"
-                    >
-                      Delete
-                    </button>
-                  </td>
-                )}
-              </tr>
-            ))}
-
-            {orders.length === 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse border border-gray-300">
+            <thead className="bg-gray-200">
               <tr>
-                <td
-                  colSpan={userRole === "admin" ? 8 : 7}
-                  className="text-center p-4 text-gray-500"
-                >
-                  No orders found
-                </td>
+                <th className="border p-2">Order ID</th>
+                <th className="border p-2">Customer</th>
+                <th className="border p-2">Email</th>
+                <th className="border p-2">Product</th>
+                <th className="border p-2">Qty</th>
+                <th className="border p-2">Price</th>
+                <th className="border p-2">Total</th>
+                <th className="border p-2">Status</th>
+                <th className="border p-2">Date</th>
+                <th className="border p-2">Actions</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {orders.map((order, idx) => {
+                const customerName =
+                  typeof order.userId === "object" && order.userId?.name
+                    ? order.userId.name
+                    : typeof order.userId === "string"
+                    ? order.userId
+                    : order.customerName || "N/A";
+                const customerEmail =
+                  typeof order.userId === "object" && order.userId?.email
+                    ? order.userId.email
+                    : "N/A";
+
+                return (
+                  <tr key={order._id} className="hover:bg-gray-50">
+                    <td className="border p-2">{idx + 1}</td>
+                    <td className="border p-2">{customerName}</td>
+                    <td className="border p-2">{customerEmail}</td>
+                    <td className="border p-2">
+                      {order.items[0]?.productName || "—"}
+                    </td>
+                    <td className="border p-2">{order.items[0]?.quantity}</td>
+                    <td className="border p-2">₹{order.items[0]?.price}</td>
+                    <td className="border p-2">₹{order.totalAmount}</td>
+                    <td className="border p-2 capitalize">
+                      <span
+                        className={`px-2 py-1 rounded text-sm ${
+                          order.status === "delivered"
+                            ? "bg-green-100 text-green-800"
+                            : order.status === "shipped"
+                            ? "bg-blue-100 text-blue-800"
+                            : "bg-yellow-100 text-yellow-800"
+                        }`}
+                      >
+                        {order.status}
+                      </span>
+                    </td>
+                    <td className="border p-2">
+                      {order.createdAt
+                        ? new Date(order.createdAt).toLocaleDateString()
+                        : "—"}
+                    </td>
+                    <td className="border p-2">
+                      <div className="flex gap-2 justify-center items-center">
+                        <select
+                          value={order.status}
+                          onChange={(e) =>
+                            handleStatusUpdate(order._id!, e.target.value)
+                          }
+                          className="border rounded p-1 text-sm"
+                        >
+                          <option value="pending">Pending</option>
+                          <option value="shipped">Shipped</option>
+                          <option value="delivered">Delivered</option>
+                        </select>
+
+                        <button
+                          onClick={() => handleDelete(order._id!)}
+                          className="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-sm"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {orders.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={10}
+                    className="text-center p-4 text-gray-500"
+                  >
+                    No orders found
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

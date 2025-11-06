@@ -36,17 +36,21 @@ export default function LoginPage() {
       if (res.ok && data.token) {
         // ✅ Save token & role
         localStorage.setItem("token", data.token);
-        if (data.user?.role) {
+        // Save role from response (could be in data.role or data.user.role)
+        if (data.role) {
+          localStorage.setItem("role", data.role);
+        } else if (data.user?.role) {
           localStorage.setItem("role", data.user.role);
         }
 
         setMessage("✅ Login successful!");
 
         // ✅ Redirect based on role
+        const userRole = data.role || data.user?.role;
         setTimeout(() => {
-          if (data.user?.role === "admin") {
+          if (userRole === "admin") {
             router.push("/dashboard");
-          } else if (data.user?.role === "customer") {
+          } else if (userRole === "customer") {
             router.push("/customer");
           } else {
             router.push("/dashboard");
